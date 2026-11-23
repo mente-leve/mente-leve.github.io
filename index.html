@@ -892,7 +892,12 @@ var MEDS=[
   ["Repara nas cores, nos sons, na temperatura desse sítio.",25],
   ["Fica aí o tempo que quiseres. Podes deixar-te adormecer.",2]]}
 ];
-var med={voice:true,amb:"nenhum",vol:0.5,rate:0.72};
+var med={voice:true,amb:"nenhum",vol:0.5,rate:0.72,rec:true};
+/* gravações em audio/<meditação>/<frase>.mp3, listadas em audio/index.json */
+var AUD={},curAudio=null;
+try{fetch("audio/index.json").then(function(r){return r.ok?r.json():{}}).then(function(j){AUD=j||{};if(location.hash==="#meditar"&&!medSel)render()}).catch(function(){})}catch(e){}
+function hasRec(k,i){return med.rec&&AUD[k]&&AUD[k].indexOf(i)>=0}
+function recCount(){var n=0;for(var k in AUD)n+=AUD[k].length;return n}
 try{var mp=JSON.parse(localStorage.getItem("menteleve.med")||"{}");for(var mk in mp)med[mk]=mp[mk]}catch(e){}
 function medSave(){try{localStorage.setItem("menteleve.med",JSON.stringify(med))}catch(e){}}
 function words(t){return t.split(/\s+/).length}
@@ -931,6 +936,7 @@ V.meditar=function(el){
   '<div class="card"><h3>Silêncio com sino</h3><p class="small muted">Sem voz. Um sino marca o início e o fim.</p><div class="chips" id="silent">'+[3,5,10,15,20].map(function(n){return '<button class="chip" type="button" data-sil="'+n+'">'+n+' min</button>'}).join("")+'</div></div>'+
   '<div class="card flat"><h3>Definições</h3>'+
   '<label class="check" style="font-weight:400;border-top:0"><input type="checkbox" id="mvoice"'+(med.voice?' checked':'')+'><span><b>Voz guia</b><br><span class="small muted">'+(hasTTS?(vs.length?'Usa a voz do teu telemóvel.':'Não encontrámos uma voz em português neste aparelho. O texto aparece no ecrã.'):'Este navegador não lê texto em voz alta. O texto aparece no ecrã.')+'</span></span></label>'+
+  (recCount()?'<label class="check" style="font-weight:400"><input type="checkbox" id="mrec"'+(med.rec?' checked':'')+'><span><b>Voz gravada (mais natural)</b><br><span class="small muted">Uma voz calma em português de Portugal. Desliga para usar a voz do telemóvel.</span></span></label>':'')+
   (vs.length>1?'<div class="field"><label for="mvsel">Voz</label><select id="mvsel">'+vs.map(function(v){var p=pickVoice();return '<option value="'+esc(v.voiceURI)+'"'+(p&&p.voiceURI===v.voiceURI?' selected':'')+'>'+esc(v.name)+' ('+esc(v.lang)+')</option>'}).join("")+'</select><span class="hint">Escolhe uma voz «pt-PT» para ouvir com sotaque de Portugal. As vozes com «Natural», «Melhorada» ou «Premium» soam mais suaves.</span></div>':'')+
   '<label>Ritmo da voz</label><div class="chips" id="mrate">'+[[0.62,"Muito calmo"],[0.72,"Calmo"],[0.85,"Normal"]].map(function(r){return '<button class="chip" type="button" data-rate="'+r[0]+'" aria-pressed="'+(med.rate===r[0])+'">'+r[1]+'</button>'}).join("")+'</div>'+
   '<label>Som de fundo</label><div class="chips" id="mamb">'+[["nenhum","Nenhum"],["chuva","Chuva"],["ondas","Ondas"],["tom","Tom suave"]].map(function(a){return '<button class="chip" type="button" data-amb="'+a[0]+'" aria-pressed="'+(med.amb===a[0])+'">'+a[1]+'</button>'}).join("")+'</div>'+
@@ -940,6 +946,7 @@ V.meditar=function(el){
   $$("[data-med]",el).forEach(function(b){b.addEventListener("click",function(){medSel=b.getAttribute("data-med");render()})});
   $$("[data-sil]",el).forEach(function(b){b.addEventListener("click",function(){medSel="sil"+b.getAttribute("data-sil");render()})});
   $("#mvoice").addEventListener("change",function(){med.voice=this.checked;medSave()});
+  var mrec=$("#mrec");if(mrec)mrec.addEventListener("change",function(){med.rec=this.checked;medSave()});
   var vsel=$("#mvsel");if(vsel)vsel.addEventListener("change",function(){med.voiceURI=this.value;medSave()});
   $$("#mamb .chip").forEach(function(c){c.addEventListener("click",function(){med.amb=c.getAttribute("data-amb");medSave();$$("#mamb .chip").forEach(function(x){x.setAttribute("aria-pressed",x===c)});ambStart(med.amb);clearTimeout(ambT);ambT=setTimeout(ambStop,4000)})});
   $$("#mrate .chip").forEach(function(c){c.addEventListener("click",function(){med.rate=+c.getAttribute("data-rate");medSave();$$("#mrate .chip").forEach(function(x){x.setAttribute("aria-pressed",x===c)})})});
@@ -963,11 +970,20 @@ function medPlayer(el,key){
   '<div class="row" style="justify-content:space-between"><span class="small muted" id="mtime">0:00</span><span class="small muted">≈ '+Math.round(total/60)+' min</span></div>'+
   '<div class="row"><button class="btn big" style="flex:1" type="button" id="mpause">Pausar</button><button class="btn soft big" type="button" id="mstop">Terminar</button></div></div>'+
   '<p class="small muted" style="text-align:center">Dica: ativa o modo «Não incomodar» no telemóvel.</p>';
-  function clear(){token++;timers.forEach(clearTimeout);timers=[];try{speechSynthesis.cancel()}catch(e){}}
+  function clear(){token++;timers.forEach(clearTimeout);timers=[];try{speechSynthesis.cancel()}catch(e){}if(curAudio){try{curAudio.pause();URL.revokeObjectURL(curAudio.src)}catch(e){}curAudio=null}}
   var iv=setInterval(function(){var now=Date.now();if(!paused&&!finished)elapsed+=(now-lastTick)/1000;lastTick=now;var e=Math.min(elapsed,total);$("#mbar")&&($("#mbar").style.width=(100*e/total).toFixed(1)+"%");$("#mtime")&&($("#mtime").textContent=Math.floor(e/60)+":"+pad(Math.floor(e%60)))},1000);
-  function speak(text,cb){
+  function speak(text,cb,li){
     var my=++token,done=false;function fin(){if(done||my!==token)return;done=true;cb()}
     var est=lineSecs(text)*1000;
+    if(med.voice&&!silent&&hasRec(m.k,li)){
+      var tts=function(){if(my!==token)return;var keep=med.rec;med.rec=false;speak(text,cb,li);med.rec=keep};
+      fetch("audio/"+m.k+"/"+li+".mp3").then(function(r){if(!r.ok)throw 0;return r.blob()}).then(function(b){
+        if(my!==token)return;var a=new Audio(URL.createObjectURL(b));a.volume=1;curAudio=a;
+        a.onended=function(){if(curAudio===a){try{URL.revokeObjectURL(a.src)}catch(e){}curAudio=null}fin()};
+        a.onerror=tts;var p=a.play();if(p&&p.catch)p.catch(tts);
+      }).catch(tts);
+      return;
+    }
     if(med.voice&&"speechSynthesis" in window&&!silent){
       try{
         var parts=sentences(text),v=pickVoice(),pi=0;speechSynthesis.cancel();
@@ -984,7 +1000,7 @@ function medPlayer(el,key){
     if(paused||finished)return;
     if(idx>=m.l.length){finish(true);return}
     var ln=m.l[idx],mt=$("#mtext");if(!mt)return;mt.textContent=ln[0];
-    speak(ln[0],function(){var my=token;timers.push(setTimeout(function(){if(my===token&&!paused){idx++;step()}},ln[1]*1000))});
+    speak(ln[0],function(){var my=token;timers.push(setTimeout(function(){if(my===token&&!paused){idx++;step()}},ln[1]*1000))},idx);
   }
   function finish(full){
     if(finished)return;finished=true;clear();clearInterval(iv);
